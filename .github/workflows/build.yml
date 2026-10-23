@@ -1,0 +1,29 @@
+name: Build AnfiGram
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Install Android SDK and NDK
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-36" "ndk;27.2.12479018"
+      - name: List build tasks
+        run: |
+          chmod +x gradlew
+          ./gradlew :TMessagesProj_App:tasks --all | grep -i assemble || true
+      - name: Build
+        run: ./gradlew :TMessagesProj_App:assembleAfatDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AnfiGram-apk
+          path: "**/build/outputs/apk/**/*.apk"
