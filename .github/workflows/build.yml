@@ -26,6 +26,8 @@ jobs:
           grep -q "APP_ID = ${TG_API_ID};" $F
           grep -q "APP_HASH = \"${TG_API_HASH}\";" $F
           grep -q "SUPPORTS_PASSKEYS = false;" $F
+      - name: Apply AnfiGram patch
+        run: python3 anfigram/patch.py
       - name: Install Android SDK and NDK
         run: |
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
