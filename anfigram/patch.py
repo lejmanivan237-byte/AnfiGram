@@ -29,9 +29,21 @@ ANFI_CONFIG = r'''package org.telegram.messenger;
 import android.content.Context;
 import android.content.SharedPreferences;
 
+import org.telegram.tgnet.TLRPC;
+
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.Set;
+
 public class AnfiConfig {
 
+    private static final int MAX_DELETED = 5000;
+
     private static volatile Boolean showSeconds;
+    private static volatile Boolean keepDeleted;
+    private static volatile Boolean showProfileId;
+    private static LinkedHashSet<String> deletedIds;
 
     private static SharedPreferences prefs() {
         return ApplicationLoader.applicationContext.getSharedPreferences("anfigram", Context.MODE_PRIVATE);
@@ -52,6 +64,88 @@ public class AnfiConfig {
     public static void setShowSeconds(boolean value) {
         showSeconds = value;
         prefs().edit().putBoolean("show_seconds", value).apply();
+    }
+
+    public static boolean isKeepDeleted() {
+        Boolean value = keepDeleted;
+        if (value == null) {
+            if (ApplicationLoader.applicationContext == null) {
+                return false;
+            }
+            value = prefs().getBoolean("keep_deleted", true);
+            keepDeleted = value;
+        }
+        return value;
+    }
+
+    public static void setKeepDeleted(boolean value) {
+        keepDeleted = value;
+        prefs().edit().putBoolean("keep_deleted", value).apply();
+    }
+
+    public static boolean isShowProfileId() {
+        Boolean value = showProfileId;
+        if (value == null) {
+            if (ApplicationLoader.applicationContext == null) {
+                return false;
+            }
+            value = prefs().getBoolean("show_profile_id", true);
+            showProfileId = value;
+        }
+        return value;
+    }
+
+    public static void setShowProfileId(boolean value) {
+        showProfileId = value;
+        prefs().edit().putBoolean("show_profile_id", value).apply();
+    }
+
+    private static synchronized LinkedHashSet<String> deleted() {
+        if (deletedIds == null) {
+            deletedIds = new LinkedHashSet<>();
+            if (ApplicationLoader.applicationContext != null) {
+                Set<String> saved = prefs().getStringSet("deleted_ids", null);
+                if (saved != null) {
+                    deletedIds.addAll(saved);
+                }
+            }
+        }
+        return deletedIds;
+    }
+
+    // key: 0 for private chats and basic groups, -channelId for channels and supergroups
+    public static synchronized void markDeleted(long key, ArrayList<Integer> ids) {
+        if (ids == null || ids.isEmpty() || ApplicationLoader.applicationContext == null) {
+            return;
+        }
+        LinkedHashSet<String> set = deleted();
+        for (int i = 0; i < ids.size(); i++) {
+            set.add(key + "_" + ids.get(i));
+        }
+        while (set.size() > MAX_DELETED) {
+            String first = set.iterator().next();
+            set.remove(first);
+        }
+        prefs().edit().putStringSet("deleted_ids", new HashSet<>(set)).apply();
+    }
+
+    public static synchronized boolean isMarkedDeleted(TLRPC.Message message) {
+        if (message == null || message.id <= 0) {
+            return false;
+        }
+        long channelId = message.peer_id != null ? message.peer_id.channel_id : 0;
+        long key = channelId != 0 ? -channelId : 0;
+        return deleted().contains(key + "_" + message.id);
+    }
+
+    public static String profileId(long userId, long chatId, boolean channel) {
+        if (userId != 0) {
+            return String.valueOf(userId);
+        }
+        if (chatId == 0) {
+            return "";
+        }
+        return channel ? "-100" + chatId : "-" + chatId;
     }
 }
 '''
@@ -74,6 +168,14 @@ import org.telegram.ui.Cells.TextInfoPrivacyCell;
 import org.telegram.ui.Components.LayoutHelper;
 
 public class AnfiSettingsActivity extends BaseFragment {
+
+    private interface Getter {
+        boolean get();
+    }
+
+    private interface Setter {
+        void set(boolean value);
+    }
 
     @Override
     public View createView(Context context) {
@@ -99,21 +201,35 @@ public class AnfiSettingsActivity extends BaseFragment {
         scrollView.addView(list, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
         frameLayout.addView(scrollView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
 
-        final TextCheckCell secondsCell = new TextCheckCell(context);
-        secondsCell.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundWhite));
-        secondsCell.setTextAndCheck("Секунды во времени сообщений", AnfiConfig.isShowSeconds(), false);
-        secondsCell.setOnClickListener(v -> {
-            boolean enabled = !AnfiConfig.isShowSeconds();
-            AnfiConfig.setShowSeconds(enabled);
-            secondsCell.setChecked(enabled);
-        });
-        list.addView(secondsCell, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        addToggle(context, list, "Секунды во времени сообщений",
+                "Вместо ЧЧ:ММ время показывается как ЧЧ:ММ:СС. Чтобы изменения применились, закройте и снова откройте чат.",
+                AnfiConfig::isShowSeconds, AnfiConfig::setShowSeconds);
 
-        TextInfoPrivacyCell info = new TextInfoPrivacyCell(context);
-        info.setText("Вместо ЧЧ:ММ время показывается как ЧЧ:ММ:СС. Чтобы изменения применились, закройте и снова откройте чат.");
-        list.addView(info, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        addToggle(context, list, "Сохранять удалённые сообщения",
+                "Сообщения, которые удалил собеседник, остаются в чате с пометкой «удалено». Сохраняются только те сообщения, которые приложение уже получило. Удаление, сделанное вами, работает как обычно.",
+                AnfiConfig::isKeepDeleted, AnfiConfig::setKeepDeleted);
+
+        addToggle(context, list, "Показывать ID в профиле",
+                "В профиле пользователя, группы или канала появляется строка с ID. Нажмите на неё, чтобы скопировать. Откройте профиль заново, чтобы увидеть изменение.",
+                AnfiConfig::isShowProfileId, AnfiConfig::setShowProfileId);
 
         return fragmentView;
+    }
+
+    private void addToggle(Context context, LinearLayout list, String title, String info, Getter getter, Setter setter) {
+        final TextCheckCell cell = new TextCheckCell(context);
+        cell.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundWhite));
+        cell.setTextAndCheck(title, getter.get(), false);
+        cell.setOnClickListener(v -> {
+            boolean enabled = !getter.get();
+            setter.set(enabled);
+            cell.setChecked(enabled);
+        });
+        list.addView(cell, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        TextInfoPrivacyCell infoCell = new TextInfoPrivacyCell(context);
+        infoCell.setText(info);
+        list.addView(infoCell, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
     }
 }
 '''
@@ -137,7 +253,7 @@ settings = JAVA / "ui/SettingsActivity.java"
 replace_once(
     settings,
     "        items.add(UItem.asHeader(getString(R.string.SettingsHelp)));",
-    "        items.add(SettingCell.Factory.of(30, IconBackgroundColors.CYAN.top, IconBackgroundColors.CYAN.bottom, R.drawable.settings_features, \"Настройки AnfiGram\", \"Секунды во времени и другое\"));\n"
+    "        items.add(SettingCell.Factory.of(30, IconBackgroundColors.CYAN.top, IconBackgroundColors.CYAN.bottom, R.drawable.settings_features, \"Настройки AnfiGram\", \"Секунды, удалённые сообщения, ID\"));\n"
     "        items.add(UItem.asShadow(null));\n"
     "        items.add(UItem.asHeader(getString(R.string.SettingsHelp)));",
 )
@@ -147,6 +263,100 @@ replace_once(
     "            case 30:\n                presentSettingFragment(new AnfiSettingsActivity());\n                break;\n"
     "            case 17:\n                showDialog(AlertsCreator.createSupportAlert(this, resourceProvider));",
 )
+
+# --------------------------------------------- keep messages deleted by others
+mc = JAVA / "messenger/MessagesController.java"
+replace_once(
+    mc,
+    "        LongSparseArray<ArrayList<Integer>> deletedMessagesFinal = deletedMessages;\n",
+    "        if (AnfiConfig.isKeepDeleted() && deletedMessages != null) {\n"
+    "            for (int anfiI = 0; anfiI < deletedMessages.size(); anfiI++) {\n"
+    "                AnfiConfig.markDeleted(deletedMessages.keyAt(anfiI), deletedMessages.valueAt(anfiI));\n"
+    "            }\n"
+    "            deletedMessages = null;\n"
+    "        }\n"
+    "        LongSparseArray<ArrayList<Integer>> deletedMessagesFinal = deletedMessages;\n",
+)
+replace_once(
+    mc,
+    "    protected void deleteMessagesByPush(long dialogId, ArrayList<Integer> ids, long channelId) {\n",
+    "    protected void deleteMessagesByPush(long dialogId, ArrayList<Integer> ids, long channelId) {\n"
+    "        if (AnfiConfig.isKeepDeleted()) {\n"
+    "            AnfiConfig.markDeleted(channelId == 0 ? 0 : -channelId, ids);\n"
+    "            getMessagesStorage().getStorageQueue().postRunnable(() -> getMessagesStorage().deletePushMessages(dialogId, ids));\n"
+    "            return;\n"
+    "        }\n",
+)
+
+# label "deleted" next to the message time
+replace_once(
+    ROOT / "TMessagesProj/src/main/java/org/telegram/ui/Cells/ChatMessageCell.java",
+    "        if (currentMessageObject.messageOwner.video_processing_pending) {\n"
+    "            timeString = formatString(R.string.ScheduledTimeApprox, timeString);\n"
+    "        }\n"
+    "        if (signString != null) {",
+    "        if (currentMessageObject.messageOwner.video_processing_pending) {\n"
+    "            timeString = formatString(R.string.ScheduledTimeApprox, timeString);\n"
+    "        }\n"
+    "        if (timeString != null && timeString.length() > 0 && org.telegram.messenger.AnfiConfig.isMarkedDeleted(currentMessageObject.messageOwner)) {\n"
+    "            timeString = \"удалено · \" + timeString;\n"
+    "        }\n"
+    "        if (signString != null) {",
+)
+
+# ------------------------------------------------------------- ID in profile
+pa = JAVA / "ui/ProfileActivity.java"
+replace_once(pa, "    private int usernameRow;\n", "    private int usernameRow;\n    private int anfiIdRow;\n")
+replace_once(pa, "        usernameRow = -1;\n", "        usernameRow = -1;\n        anfiIdRow = -1;\n")
+replace_once(
+    pa,
+    "                infoStartRow = rowCount;\n                if (!isBot && (hasPhone || !hasInfo)) {",
+    "                infoStartRow = rowCount;\n"
+    "                if (AnfiConfig.isShowProfileId()) {\n"
+    "                    anfiIdRow = rowCount++;\n"
+    "                }\n"
+    "                if (!isBot && (hasPhone || !hasInfo)) {",
+)
+replace_once(
+    pa,
+    "                if (ChatObject.isPublic(currentChat)) {\n                    usernameRow = rowCount++;\n                }",
+    "                if (AnfiConfig.isShowProfileId()) {\n"
+    "                    anfiIdRow = rowCount++;\n"
+    "                }\n"
+    "                if (ChatObject.isPublic(currentChat)) {\n                    usernameRow = rowCount++;\n                }",
+)
+replace_once(
+    pa,
+    "                    } else if (position == phoneRow) {\n                        String text;\n                        TLRPC.User user = getMessagesController().getUser(userId);",
+    "                    } else if (position == anfiIdRow) {\n"
+    "                        detailCell.setTextAndValue(AnfiConfig.profileId(userId, chatId, ChatObject.isChannel(currentChat)), \"ID (нажмите, чтобы скопировать)\", false);\n"
+    "                    } else if (position == phoneRow) {\n                        String text;\n                        TLRPC.User user = getMessagesController().getUser(userId);",
+)
+replace_once(
+    pa,
+    "            } else if (position == usernameRow) {\n                processOnClickOrPress(position, view, x, y);",
+    "            } else if (position == anfiIdRow) {\n"
+    "                AndroidUtilities.addToClipboard(AnfiConfig.profileId(userId, chatId, ChatObject.isChannel(currentChat)));\n"
+    "                BulletinFactory.of(this).createCopyBulletin(\"ID скопирован\", resourcesProvider).show();\n"
+    "            } else if (position == usernameRow) {\n                processOnClickOrPress(position, view, x, y);",
+)
+replace_once(
+    pa,
+    "            } else if (position == phoneRow || position == locationRow || position == numberRow || position == birthdayRow) {\n                return VIEW_TYPE_TEXT_DETAIL;",
+    "            } else if (position == anfiIdRow || position == phoneRow || position == locationRow || position == numberRow || position == birthdayRow) {\n                return VIEW_TYPE_TEXT_DETAIL;",
+)
+replace_once(
+    pa,
+    "            put(++pointer, usernameRow, sparseIntArray);\n",
+    "            put(++pointer, anfiIdRow, sparseIntArray);\n            put(++pointer, usernameRow, sparseIntArray);\n",
+)
+# ProfileActivity lives in org.telegram.ui, AnfiConfig in org.telegram.messenger
+s = read(pa)
+if "import org.telegram.messenger.AnfiConfig;" not in s:
+    s = s.replace("import org.telegram.messenger.AndroidUtilities;", "import org.telegram.messenger.AndroidUtilities;\nimport org.telegram.messenger.AnfiConfig;", 1)
+    if "import org.telegram.messenger.AnfiConfig;" not in s:
+        sys.exit("PATCH FAILED: could not add AnfiConfig import to ProfileActivity")
+    write(pa, s)
 
 # ------------------------------------------------------------- app name
 strings = ROOT / "TMessagesProj/src/main/res/values/strings.xml"
