@@ -13,16 +13,27 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+          cache: gradle
+      - name: Inject API keys
+        env:
+          TG_API_ID: ${{ secrets.TG_API_ID }}
+          TG_API_HASH: ${{ secrets.TG_API_HASH }}
+        run: |
+          F=TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
+          sed -i "s/APP_ID = 4;/APP_ID = ${TG_API_ID};/" $F
+          sed -i "s/APP_HASH = \"[0-9a-f]*\";/APP_HASH = \"${TG_API_HASH}\";/" $F
+          sed -i "s/SUPPORTS_PASSKEYS = true;/SUPPORTS_PASSKEYS = false;/" $F
+          grep -q "APP_ID = ${TG_API_ID};" $F
+          grep -q "APP_HASH = \"${TG_API_HASH}\";" $F
+          grep -q "SUPPORTS_PASSKEYS = false;" $F
       - name: Install Android SDK and NDK
         run: |
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
           $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-36" "ndk;27.2.12479018"
-      - name: List build tasks
+      - name: Build
         run: |
           chmod +x gradlew
-          ./gradlew :TMessagesProj_App:tasks --all | grep -i assemble || true
-      - name: Build
-        run: ./gradlew :TMessagesProj_App:assembleAfatDebug --no-daemon
+          ./gradlew :TMessagesProj_App:assembleAfatDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
           name: AnfiGram-apk
