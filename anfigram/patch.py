@@ -29,6 +29,14 @@ ANFI_CONFIG = r'''package org.telegram.messenger;
 import android.content.Context;
 import android.content.SharedPreferences;
 
+import android.graphics.Color;
+import android.graphics.PorterDuff;
+import android.graphics.drawable.Drawable;
+import android.text.Spannable;
+import android.text.SpannableStringBuilder;
+import android.text.style.ForegroundColorSpan;
+import android.text.style.ImageSpan;
+
 import org.telegram.tgnet.TLRPC;
 
 import java.util.ArrayList;
@@ -43,6 +51,8 @@ public class AnfiConfig {
     private static volatile Boolean showSeconds;
     private static volatile Boolean keepDeleted;
     private static volatile Boolean showProfileId;
+    private static volatile Boolean deletedFade;
+    private static volatile Integer deletedStyle;
     private static LinkedHashSet<String> deletedIds;
 
     private static SharedPreferences prefs() {
@@ -100,6 +110,72 @@ public class AnfiConfig {
         prefs().edit().putBoolean("show_profile_id", value).apply();
     }
 
+    // deleted-message look: fade
+    public static boolean isDeletedFade() {
+        Boolean value = deletedFade;
+        if (value == null) {
+            if (ApplicationLoader.applicationContext == null) {
+                return true;
+            }
+            value = prefs().getBoolean("deleted_fade", true);
+            deletedFade = value;
+        }
+        return value;
+    }
+
+    public static void setDeletedFade(boolean value) {
+        deletedFade = value;
+        prefs().edit().putBoolean("deleted_fade", value).apply();
+        notifyChanged();
+    }
+
+    // 0 = text "удалено", 1 = red cross, 2 = red trash icon
+    public static int getDeletedStyle() {
+        Integer value = deletedStyle;
+        if (value == null) {
+            if (ApplicationLoader.applicationContext == null) {
+                return 0;
+            }
+            value = prefs().getInt("deleted_style", 0);
+            deletedStyle = value;
+        }
+        return value;
+    }
+
+    public static void setDeletedStyle(int value) {
+        deletedStyle = value;
+        prefs().edit().putInt("deleted_style", value).apply();
+        notifyChanged();
+    }
+
+    public static void notifyChanged() {
+        AndroidUtilities.runOnUIThread(() -> {
+            for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
+                NotificationCenter.getInstance(a).postNotificationName(NotificationCenter.anfiDeletedMarked);
+            }
+        });
+    }
+
+    public static CharSequence decorateDeleted(CharSequence time) {
+        int style = getDeletedStyle();
+        if (style == 0 || time == null) {
+            return time;
+        }
+        SpannableStringBuilder sb = new SpannableStringBuilder();
+        if (style == 1) {
+            sb.append("\u2715 ");
+            sb.setSpan(new ForegroundColorSpan(0xFFE53935), 0, 1, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        } else {
+            sb.append("\u2007\u2007 ");
+            Drawable d = ApplicationLoader.applicationContext.getResources().getDrawable(R.drawable.msg_delete).mutate();
+            d.setColorFilter(0xFFE53935, PorterDuff.Mode.SRC_IN);
+            d.setBounds(0, 0, AndroidUtilities.dp(12), AndroidUtilities.dp(12));
+            sb.setSpan(new ImageSpan(d, ImageSpan.ALIGN_BOTTOM), 0, 2, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        sb.append(time);
+        return sb;
+    }
+
     private static synchronized LinkedHashSet<String> deleted() {
         if (deletedIds == null) {
             deletedIds = new LinkedHashSet<>();
@@ -127,6 +203,7 @@ public class AnfiConfig {
             set.remove(first);
         }
         prefs().edit().putStringSet("deleted_ids", new HashSet<>(set)).apply();
+        notifyChanged();
     }
 
     public static synchronized boolean isMarkedDeleted(TLRPC.Message message) {
@@ -205,9 +282,41 @@ public class AnfiSettingsActivity extends BaseFragment {
                 "Вместо ЧЧ:ММ время показывается как ЧЧ:ММ:СС. Чтобы изменения применились, закройте и снова откройте чат.",
                 AnfiConfig::isShowSeconds, AnfiConfig::setShowSeconds);
 
+        final LinearLayout deletedOptions = new LinearLayout(context);
+        deletedOptions.setOrientation(LinearLayout.VERTICAL);
+        deletedOptions.setVisibility(AnfiConfig.isKeepDeleted() ? View.VISIBLE : View.GONE);
+
         addToggle(context, list, "Сохранять удалённые сообщения",
-                "Сообщения, которые удалил собеседник, остаются в чате с пометкой «удалено». Сохраняются только те сообщения, которые приложение уже получило. Удаление, сделанное вами, работает как обычно.",
-                AnfiConfig::isKeepDeleted, AnfiConfig::setKeepDeleted);
+                "Сообщения, которые удалил собеседник, остаются в чате с пометкой. Сохраняются только те сообщения, которые приложение уже получило. Удаление, сделанное вами, работает как обычно.",
+                AnfiConfig::isKeepDeleted, value -> {
+                    AnfiConfig.setKeepDeleted(value);
+                    deletedOptions.setVisibility(value ? View.VISIBLE : View.GONE);
+                });
+        list.addView(deletedOptions, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        addToggle(context, deletedOptions, "Полупрозрачные удалённые",
+                "Удалённое сообщение становится полупрозрачным.",
+                AnfiConfig::isDeletedFade, AnfiConfig::setDeletedFade);
+
+        final String[] styleTitles = {"Пометка: надпись «удалено»", "Пометка: красный крестик", "Пометка: красная корзина"};
+        final TextCheckCell[] styleCells = new TextCheckCell[3];
+        for (int i = 0; i < 3; i++) {
+            final int style = i;
+            final TextCheckCell cell = new TextCheckCell(context);
+            cell.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundWhite));
+            cell.setTextAndCheck(styleTitles[i], AnfiConfig.getDeletedStyle() == i, false);
+            cell.setOnClickListener(v -> {
+                AnfiConfig.setDeletedStyle(style);
+                for (int j = 0; j < 3; j++) {
+                    styleCells[j].setChecked(j == style);
+                }
+            });
+            styleCells[i] = cell;
+            deletedOptions.addView(cell, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        }
+        TextInfoPrivacyCell styleInfo = new TextInfoPrivacyCell(context);
+        styleInfo.setText("Как отмечать удалённые сообщения возле времени. Применяется сразу.");
+        deletedOptions.addView(styleInfo, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
         addToggle(context, list, "Показывать ID в профиле",
                 "В профиле пользователя, группы или канала появляется строка с ID. Нажмите на неё, чтобы скопировать. Откройте профиль заново, чтобы увидеть изменение.",
@@ -252,10 +361,10 @@ replace_once(
 settings = JAVA / "ui/SettingsActivity.java"
 replace_once(
     settings,
-    "        items.add(UItem.asHeader(getString(R.string.SettingsHelp)));",
+    "        items.add(UItem.asCustomShadow(topView, 200 - 12));\n",
+    "        items.add(UItem.asCustomShadow(topView, 200 - 12));\n"
     "        items.add(SettingCell.Factory.of(30, IconBackgroundColors.CYAN.top, IconBackgroundColors.CYAN.bottom, R.drawable.settings_features, \"Настройки AnfiGram\", \"Секунды, удалённые сообщения, ID\"));\n"
-    "        items.add(UItem.asShadow(null));\n"
-    "        items.add(UItem.asHeader(getString(R.string.SettingsHelp)));",
+    "        items.add(UItem.asShadow(null));\n",
 )
 replace_once(
     settings,
@@ -299,9 +408,68 @@ replace_once(
     "            timeString = formatString(R.string.ScheduledTimeApprox, timeString);\n"
     "        }\n"
     "        if (timeString != null && timeString.length() > 0 && org.telegram.messenger.AnfiConfig.isMarkedDeleted(currentMessageObject.messageOwner)) {\n"
-    "            timeString = \"удалено · \" + timeString;\n"
+    "            timeString = (org.telegram.messenger.AnfiConfig.getDeletedStyle() == 0 ? \"удалено · \" : \"\") + timeString;\n"
     "        }\n"
     "        if (signString != null) {",
+)
+
+cmc = JAVA / "ui/Cells/ChatMessageCell.java"
+replace_once(
+    cmc,
+    "        timeTextWidth = timeWidth = (int) Math.ceil(Theme.chat_timePaint.measureText(currentTimeString, 0, currentTimeString == null ? 0 : currentTimeString.length()));\n",
+    "        if (currentTimeString != null && org.telegram.messenger.AnfiConfig.isKeepDeleted() && org.telegram.messenger.AnfiConfig.getDeletedStyle() != 0 && org.telegram.messenger.AnfiConfig.isMarkedDeleted(currentMessageObject.messageOwner)) {\n"
+    "            currentTimeString = org.telegram.messenger.AnfiConfig.decorateDeleted(currentTimeString);\n"
+    "        }\n"
+    "        timeTextWidth = timeWidth = (int) Math.ceil(Theme.chat_timePaint.measureText(currentTimeString, 0, currentTimeString == null ? 0 : currentTimeString.length()));\n",
+)
+replace_once(
+    cmc,
+    "    protected void onDraw(Canvas canvas) {\n        drawInternal(canvas);\n    }",
+    "    protected void onDraw(Canvas canvas) {\n"
+    "        boolean anfiFade = currentMessageObject != null && org.telegram.messenger.AnfiConfig.isKeepDeleted() && org.telegram.messenger.AnfiConfig.isDeletedFade() && org.telegram.messenger.AnfiConfig.isMarkedDeleted(currentMessageObject.messageOwner);\n"
+    "        if (anfiFade) {\n"
+    "            if (getAlpha() == 1f) {\n"
+    "                setAlpha(0.5f);\n"
+    "            }\n"
+    "        } else if (getAlpha() == 0.5f) {\n"
+    "            setAlpha(1f);\n"
+    "        }\n"
+    "        drawInternal(canvas);\n    }",
+)
+
+# ---- NotificationCenter + ChatActivity
+replace_once(
+    JAVA / "messenger/NotificationCenter.java",
+    "    public static final int reloadInterface = totalEvents++;\n",
+    "    public static final int reloadInterface = totalEvents++;\n    public static final int anfiDeletedMarked = totalEvents++;\n",
+)
+ca = JAVA / "ui/ChatActivity.java"
+replace_once(
+    ca,
+    "            .add(NotificationCenter.messagesDeleted)\n            .add(NotificationCenter.historyCleared)",
+    "            .add(NotificationCenter.messagesDeleted)\n            .add(NotificationCenter.anfiDeletedMarked)\n            .add(NotificationCenter.historyCleared)",
+)
+replace_once(
+    ca,
+    "    public void didReceivedNotification(int id, int account, final Object... args) {\n        if (id == NotificationCenter.messagesDidLoad) {",
+    "    public void didReceivedNotification(int id, int account, final Object... args) {\n"
+    "        if (id == NotificationCenter.anfiDeletedMarked) {\n"
+    "            if (chatAdapter != null) {\n"
+    "                for (int anfiI = 0; anfiI < messages.size(); anfiI++) {\n"
+    "                    messages.get(anfiI).forceUpdate = true;\n"
+    "                }\n"
+    "                chatAdapter.notifyDataSetChanged();\n"
+    "            }\n"
+    "            return;\n"
+    "        }\n"
+    "        if (id == NotificationCenter.messagesDidLoad) {",
+)
+
+# ---- Dialogs title
+replace_once(
+    JAVA / "ui/DialogsActivity.java",
+    "                ssb.setSpan(new ImageSpan(logoDrawable), 0, ssb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);\n",
+    "",
 )
 
 # ------------------------------------------------------------- ID in profile
