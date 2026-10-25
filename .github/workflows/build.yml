@@ -30,6 +30,18 @@ jobs:
           grep -q "SUPPORTS_PASSKEYS = false;" $F
       - name: Apply AnfiGram patch
         run: python3 anfigram/patch.py
+      - name: Use stable signing key
+        env:
+          KS: ${{ secrets.ANFI_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KS" ]; then
+            mkdir -p ~/.android
+            echo "$KS" | base64 -d > ~/.android/debug.keystore
+            keytool -list -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey > /dev/null
+            echo "Stable key in use"
+          else
+            echo "No ANFI_KEYSTORE_B64 secret: using a random debug key"
+          fi
       - name: Install Android SDK and NDK
         run: |
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
