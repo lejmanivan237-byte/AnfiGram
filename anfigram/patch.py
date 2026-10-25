@@ -370,12 +370,13 @@ write(strings, s)
 # ---------------------------------------------------------- package name
 NEW_PKG = "com.anfigram.app"
 replace_once(ROOT / "gradle.properties", "APP_PACKAGE=org.telegram.messenger", "APP_PACKAGE=" + NEW_PKG)
-for gs in (ROOT / "TMessagesProj_App/google-services.json", ROOT / "TMessagesProj/google-services.json"):
-    if gs.exists():
-        t = read(gs)
-        t, n = re.subn(r'"package_name":\s*"org\.telegram\.messenger', '"package_name": "' + NEW_PKG, t)
-        if n == 0:
-            sys.exit("PATCH FAILED: no package_name in %s" % gs)
-        write(gs, t)
+# Only the app module gets the new package. The TMessagesProj library module keeps
+# its own google-services.json, because its namespace stays org.telegram.messenger.
+gs = ROOT / "TMessagesProj_App/google-services.json"
+t = read(gs)
+t, n = re.subn(r'"package_name":\s*"org\.telegram\.messenger', '"package_name": "' + NEW_PKG, t)
+if n == 0:
+    sys.exit("PATCH FAILED: no package_name in %s" % gs)
+write(gs, t)
 
 print("AnfiGram patch applied")
