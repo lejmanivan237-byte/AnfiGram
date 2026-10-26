@@ -363,7 +363,7 @@ replace_once(
     settings,
     "        items.add(UItem.asCustomShadow(topView, 200 - 12));\n",
     "        items.add(UItem.asCustomShadow(topView, 200 - 12));\n"
-    "        items.add(SettingCell.Factory.of(30, IconBackgroundColors.CYAN.top, IconBackgroundColors.CYAN.bottom, R.drawable.settings_features, \"Настройки AnfiGram\", \"Секунды, удалённые сообщения, ID\"));\n"
+    "        items.add(SettingCell.Factory.of(30, 0xFF0B2A16, 0xFF020402, R.drawable.anfi_settings, \"Настройки AnfiGram\", \"Секунды, удалённые сообщения, ID\"));\n"
     "        items.add(UItem.asShadow(null));\n",
 )
 replace_once(
@@ -525,6 +525,10 @@ if "import org.telegram.messenger.AnfiConfig;" not in s:
     if "import org.telegram.messenger.AnfiConfig;" not in s:
         sys.exit("PATCH FAILED: could not add AnfiConfig import to ProfileActivity")
     write(pa, s)
+
+# ------------------------------------------------------------- icons
+import shutil
+shutil.copytree(ROOT / "anfigram/assets/res", ROOT / "TMessagesProj/src/main/res", dirs_exist_ok=True)
 
 # ------------------------------------------------------------- app name
 strings = ROOT / "TMessagesProj/src/main/res/values/strings.xml"
